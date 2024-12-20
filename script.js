@@ -1,6 +1,10 @@
 const mysql = require('mysql2');
 const ffmpeg = require('fluent-ffmpeg');
-const path = require('path');
+const cliProgress = require('cli-progress');
+
+// Set path to ffprobe (if necessary)
+const ffprobePath = 'C:/ffmpeg/bin/ffprobe'; // Adjust the path based on your system
+ffmpeg.setFfprobePath(ffprobePath);
 
 // Create MySQL connection
 const connection = mysql.createConnection({
@@ -19,10 +23,10 @@ connection.connect((err) => {
   console.log('Connected to MySQL database');
 });
 
-// Function to get video duration using FFmpeg
-function getVideoDuration(filePath) {
+// Function to get video duration using FFmpeg (remote URL)
+function getVideoDuration(videoUrl) {
   return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
+    ffmpeg.ffprobe(videoUrl, (err, metadata) => {
       if (err) {
         return reject('Error fetching video duration: ' + err.message);
       }
@@ -42,7 +46,7 @@ function formatDuration(seconds) {
 
 // Function to update video duration in MySQL
 function updateVideoDuration(videoUrl, duration) {
-  const query = `UPDATE topic_details SET video_duration = ? WHERE video_url = ? AND type = 'video' AND video_type = 'upload'`;
+  const query = `UPDATE topic_details SET video_duration = ? WHERE content = ? AND type = 'video' AND video_type = 'upload'`;
   connection.execute(query, [duration, videoUrl], (err, results) => {
     if (err) {
       console.error('Error updating database:', err.stack);
@@ -55,41 +59,46 @@ function updateVideoDuration(videoUrl, duration) {
 // Main function
 async function main() {
   try {
-    // Get video URLs from 'topic_details' table where type = 'video' and video_type = 'upload'
-    connection.query("SELECT video_url FROM topic_details WHERE type = 'video' AND video_type = 'upload'", async (err, results) => {
+    connection.query("SELECT content FROM topic_details WHERE type = 'video' AND video_type = 'upload'", async (err, results) => {
       if (err) {
         console.error('Error fetching video URLs:', err.stack);
         return;
       }
 
+      const totalVideos = results.length;
+      let processedVideos = 0;
+
+      console.log(`Total videos to process: ${totalVideos}`);
+
       for (const row of results) {
-        const videoUrl = row.video_url;
-        console.log(`Processing video: ${videoUrl}`);
-        
-        // Assuming video is stored locally, adjust the file path if necessary
-        const filePath = path.join(__dirname, 'videos', path.basename(videoUrl)); // Adjust path based on actual file location
-        
+        const videoUrl = row.content;
+        console.log(`\nProcessing video: ${videoUrl}`);
+
         try {
-          // Get video duration
-          const durationInSeconds = await getVideoDuration(filePath);
+          console.log('Getting video duration...');
+          const durationInSeconds = await getVideoDuration(videoUrl);
           const formattedDuration = formatDuration(durationInSeconds);
 
-          // Update database with the video duration
+          console.log(`Updating video duration in database...`);
           updateVideoDuration(videoUrl, formattedDuration);
+
+          console.log(`Processed video: ${videoUrl}`);
         } catch (err) {
           console.error(`Error processing ${videoUrl}: ${err}`);
         }
+
+        processedVideos++;
+        console.log(`Progress: ${(processedVideos / totalVideos * 100).toFixed(2)}% (${processedVideos}/${totalVideos})`);
       }
+
+      console.log('\nFinished processing all videos.');
+      connection.end();
     });
   } catch (err) {
     console.error('Error in main function:', err);
+    connection.end();
   }
 }
 
 // Run the script
 main();
-
-// Close MySQL connection when done
-process.on('exit', () => {
-  connection.end();
-});
